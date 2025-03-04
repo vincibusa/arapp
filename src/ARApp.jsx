@@ -107,7 +107,7 @@ const ARApp = () => {
     const base64Image = dataUrl.split(',')[1];
     
     // Sostituisci con la tua API key di Google Cloud Vision
-    const apiKey = 'YOUR_API_KEY_HERE';
+    const apiKey = 'AIzaSyAuGHvL8Mb83n-pmWLaBJ55L92AVl4kA3s';
     const requestBody = {
       requests: [
         {
