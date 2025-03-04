@@ -8,6 +8,7 @@ const ARApp = () => {
   const [debugInfo, setDebugInfo] = useState([]);
   const [cloudVisionResponse, setCloudVisionResponse] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [detectionMessage, setDetectionMessage] = useState('');
 
   const videoRef = useRef(null);
 
@@ -38,7 +39,6 @@ const ARApp = () => {
         throw new Error('Riferimento video non disponibile');
       }
       
-      // Constraint per usare la fotocamera posteriore
       const constraints = { video: { facingMode: 'environment' } };
       addDebugMessage(`Richiesta stream con constraints: ${JSON.stringify(constraints)}`);
       
@@ -96,7 +96,10 @@ const ARApp = () => {
       requests: [
         {
           image: { content: base64Image },
-          features: [{ type: "LABEL_DETECTION", maxResults: 5 }]
+          features: [
+            { type: "LABEL_DETECTION", maxResults: 5 },
+            { type: "LANDMARK_DETECTION", maxResults: 5 }
+          ]
         }
       ]
     };
@@ -113,11 +116,40 @@ const ARApp = () => {
       );
       const data = await response.json();
       setCloudVisionResponse(data);
+      processVisionResponse(data);
       setModalOpen(true);
       addDebugMessage("Risposta da Cloud Vision ricevuta");
     } catch (error) {
       addDebugMessage(`Errore in Cloud Vision: ${error.message}`);
     }
+  };
+
+  // Funzione per analizzare la risposta e determinare se si tratta di un monumento o di un'opera d'arte
+  const processVisionResponse = (data) => {
+    const responseData = data.responses && data.responses[0];
+    let message = 'Nessuna rilevazione significativa';
+    if (responseData) {
+      // Se è presente il landmarkAnnotations, consideriamo che si tratti di un monumento
+      if (responseData.landmarkAnnotations && responseData.landmarkAnnotations.length > 0) {
+        const landmark = responseData.landmarkAnnotations[0];
+        message = `Monumento rilevato: ${landmark.description}`;
+      } 
+      // Altrimenti controlla le etichette per opere d'arte
+      else if (responseData.labelAnnotations && responseData.labelAnnotations.length > 0) {
+        const artLabels = responseData.labelAnnotations.filter(label => 
+          label.description.toLowerCase().includes('art') ||
+          label.description.toLowerCase().includes('painting') ||
+          label.description.toLowerCase().includes('sculpture')
+        );
+        if (artLabels.length > 0) {
+          message = `Opera d'arte rilevata: ${artLabels[0].description}`;
+        } else {
+          message = `Etichette rilevate: ${responseData.labelAnnotations.map(label => label.description).join(', ')}`;
+        }
+      }
+    }
+    setDetectionMessage(message);
+    addDebugMessage(`Messaggio rilevazione: ${message}`);
   };
 
   // Ferma la camera e resetta lo stream
@@ -200,6 +232,7 @@ const ARApp = () => {
                 </button>
               </div>
               <div className="p-4 overflow-auto max-h-80">
+                <p className="mb-2 font-semibold text-sm">{detectionMessage}</p>
                 <pre className="text-xs whitespace-pre-wrap">
                   {JSON.stringify(cloudVisionResponse, null, 2)}
                 </pre>
