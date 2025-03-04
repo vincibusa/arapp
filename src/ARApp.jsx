@@ -18,6 +18,22 @@ const ARApp = () => {
     console.log(`[DEBUG] ${message}`);
   };
 
+  // Funzione per ottenere i dettagli dell'opera da Wikipedia in italiano
+  const fetchArtworkDetails = async (title) => {
+    const url = `https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error("Errore nella richiesta a Wikipedia");
+      }
+      const data = await response.json();
+      return data; // contiene campi come title, extract, thumbnail, ecc.
+    } catch (error) {
+      console.error("Errore nel recuperare i dettagli dell'opera:", error);
+      return null;
+    }
+  };
+
   // Verifica se la MediaDevices API è supportata
   useEffect(() => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -91,7 +107,7 @@ const ARApp = () => {
     const base64Image = dataUrl.split(',')[1];
     
     // Sostituisci con la tua API key di Google Cloud Vision
-    const apiKey = 'AIzaSyAuGHvL8Mb83n-pmWLaBJ55L92AVl4kA3s';
+    const apiKey = 'YOUR_API_KEY_HERE';
     const requestBody = {
       requests: [
         {
@@ -116,7 +132,8 @@ const ARApp = () => {
       );
       const data = await response.json();
       setCloudVisionResponse(data);
-      processVisionResponse(data);
+      // Attendi l'elaborazione della risposta
+      await processVisionResponse(data);
       setModalOpen(true);
       addDebugMessage("Risposta da Cloud Vision ricevuta");
     } catch (error) {
@@ -125,7 +142,7 @@ const ARApp = () => {
   };
 
   // Funzione per analizzare la risposta e determinare se si tratta di un monumento o di un'opera d'arte
-  const processVisionResponse = (data) => {
+  const processVisionResponse = async (data) => {
     const responseData = data.responses && data.responses[0];
     let message = 'Nessuna rilevazione significativa';
     if (responseData) {
@@ -136,13 +153,20 @@ const ARApp = () => {
       } 
       // Altrimenti controlla le etichette per opere d'arte
       else if (responseData.labelAnnotations && responseData.labelAnnotations.length > 0) {
-        const artLabels = responseData.labelAnnotations.filter(label => 
-          label.description.toLowerCase().includes('art') ||
-          label.description.toLowerCase().includes('painting') ||
-          label.description.toLowerCase().includes('sculpture')
+        // Definisci alcune etichette generiche da escludere
+        const genericLabels = ['art', 'painting', 'sculpture', 'picture', 'canvas'];
+        // Filtra le etichette non generiche per ottenere un titolo specifico
+        const specificLabels = responseData.labelAnnotations.filter(label =>
+          !genericLabels.includes(label.description.toLowerCase())
         );
-        if (artLabels.length > 0) {
-          message = `Opera d'arte rilevata: ${artLabels[0].description}`;
+        if (specificLabels.length > 0) {
+          const artworkTitle = specificLabels[0].description;
+          message = `Opera d'arte riconosciuta: ${artworkTitle}`;
+          // Prova a ottenere dettagli da Wikipedia (in italiano)
+          const artworkDetails = await fetchArtworkDetails(artworkTitle);
+          if (artworkDetails && artworkDetails.extract) {
+            message += `\nDettagli: ${artworkDetails.extract}`;
+          }
         } else {
           message = `Etichette rilevate: ${responseData.labelAnnotations.map(label => label.description).join(', ')}`;
         }
