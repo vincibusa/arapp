@@ -1,12 +1,23 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, X } from 'lucide-react';
 
+// Funzione di mapping per tradurre titoli noti dall'inglese all'italiano
+const mapEnglishToItalian = (title) => {
+  const mapping = {
+    "Colosseum": "Colosseo",
+    "The Colosseum": "Colosseo",
+    // Aggiungi altre traduzioni manuali se necessario
+  };
+  return mapping[title] || title;
+};
+
 const ARApp = () => {
   const [cameraActive, setCameraActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [cameraError, setCameraError] = useState(null);
   const [debugInfo, setDebugInfo] = useState([]);
   const [cloudVisionResponse, setCloudVisionResponse] = useState(null);
+  const [wikiResponse, setWikiResponse] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [detectionMessage, setDetectionMessage] = useState('');
 
@@ -18,7 +29,7 @@ const ARApp = () => {
     console.log(`[DEBUG] ${message}`);
   };
 
-  // Funzione per ottenere i dettagli dell'opera da Wikipedia in italiano
+  // Funzione per ottenere i dettagli da Wikipedia in italiano
   const fetchArtworkDetails = async (title) => {
     const url = `https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
     try {
@@ -141,17 +152,27 @@ const ARApp = () => {
     }
   };
 
-  // Funzione per analizzare la risposta e determinare se si tratta di un monumento o di un'opera d'arte
+  // Funzione per analizzare la risposta e ottenere dettagli tramite Wikipedia
   const processVisionResponse = async (data) => {
+    // Resetta la risposta di Wikipedia ad ogni nuova chiamata
+    setWikiResponse(null);
     const responseData = data.responses && data.responses[0];
     let message = 'Nessuna rilevazione significativa';
     if (responseData) {
-      // Se è presente il landmarkAnnotations, consideriamo che si tratti di un monumento
+      // Se è presente landmarkAnnotations, consideriamo che si tratti di un monumento
       if (responseData.landmarkAnnotations && responseData.landmarkAnnotations.length > 0) {
         const landmark = responseData.landmarkAnnotations[0];
-        message = `Monumento rilevato: ${landmark.description}`;
+        // Mappa il titolo in inglese a quello in italiano (es. Colosseum -> Colosseo)
+        const italianTitle = mapEnglishToItalian(landmark.description);
+        message = `Monumento rilevato: ${landmark.description} (${italianTitle})`;
+        // Ottieni dettagli da Wikipedia usando il titolo mappato
+        const monumentDetails = await fetchArtworkDetails(italianTitle);
+        if (monumentDetails && monumentDetails.extract) {
+          message += `\nDettagli: ${monumentDetails.extract}`;
+          setWikiResponse(monumentDetails);
+        }
       } 
-      // Altrimenti controlla le etichette per opere d'arte
+      // Altrimenti, controlla le etichette per opere d'arte
       else if (responseData.labelAnnotations && responseData.labelAnnotations.length > 0) {
         // Definisci alcune etichette generiche da escludere
         const genericLabels = ['art', 'painting', 'sculpture', 'picture', 'canvas'];
@@ -166,6 +187,7 @@ const ARApp = () => {
           const artworkDetails = await fetchArtworkDetails(artworkTitle);
           if (artworkDetails && artworkDetails.extract) {
             message += `\nDettagli: ${artworkDetails.extract}`;
+            setWikiResponse(artworkDetails);
           }
         } else {
           message = `Etichette rilevate: ${responseData.labelAnnotations.map(label => label.description).join(', ')}`;
@@ -238,7 +260,7 @@ const ARApp = () => {
           </div>
         )}
 
-        {/* Modale per mostrare la risposta di Cloud Vision */}
+        {/* Modale per mostrare le risposte */}
         {modalOpen && cloudVisionResponse && (
           <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
             <div 
@@ -260,6 +282,14 @@ const ARApp = () => {
                 <pre className="text-xs whitespace-pre-wrap">
                   {JSON.stringify(cloudVisionResponse, null, 2)}
                 </pre>
+                {wikiResponse && (
+                  <div className="mt-4">
+                    <h4 className="font-bold text-sm">Risposta Wikipedia:</h4>
+                    <pre className="text-xs whitespace-pre-wrap">
+                      {JSON.stringify(wikiResponse, null, 2)}
+                    </pre>
+                  </div>
+                )}
               </div>
             </div>
           </div>
