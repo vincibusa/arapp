@@ -1,12 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, X } from 'lucide-react';
+import Header from './components/Header';
+import CameraFeed from './components/CameraFeed';
+import ModalResponse from './components/ModalResponse';
 
-// Funzione di mapping per tradurre titoli noti dall'inglese all'italiano
-const mapEnglishToItalian = (title) => {
+
+// Funzione di mapping per tradurre/forzare titoli
+const mapTitle = (title) => {
   const mapping = {
     "Colosseum": "Colosseo",
     "The Colosseum": "Colosseo",
-    // Aggiungi altre traduzioni manuali se necessario
+    "Mona Lisa": "La Gioconda",
+    "The Mona Lisa": "La Gioconda",
+    "Gioconda": "La Gioconda"
   };
   return mapping[title] || title;
 };
@@ -20,16 +25,17 @@ const ARApp = () => {
   const [wikiResponse, setWikiResponse] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [detectionMessage, setDetectionMessage] = useState('');
+  const [manualTitle, setManualTitle] = useState('');
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [candidates, setCandidates] = useState([]);
 
   const videoRef = useRef(null);
 
-  // Funzione per aggiungere messaggi di debug
   const addDebugMessage = (message) => {
-    setDebugInfo((prev) => [...prev, { time: new Date().toLocaleTimeString(), message }]);
+    setDebugInfo(prev => [...prev, { time: new Date().toLocaleTimeString(), message }]);
     console.log(`[DEBUG] ${message}`);
   };
 
-  // Funzione per ottenere i dettagli da Wikipedia in italiano
   const fetchArtworkDetails = async (title) => {
     const url = `https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
     try {
@@ -38,14 +44,13 @@ const ARApp = () => {
         throw new Error("Errore nella richiesta a Wikipedia");
       }
       const data = await response.json();
-      return data; // contiene campi come title, extract, thumbnail, ecc.
+      return data;
     } catch (error) {
       console.error("Errore nel recuperare i dettagli dell'opera:", error);
       return null;
     }
   };
 
-  // Verifica se la MediaDevices API è supportata
   useEffect(() => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       addDebugMessage('MediaDevices API non supportato in questo browser');
@@ -55,41 +60,32 @@ const ARApp = () => {
     }
   }, []);
 
-  // Avvia la camera (con constraint per la fotocamera posteriore)
   const startCamera = async () => {
     setLoading(true);
     setCameraError(null);
     addDebugMessage('Tentativo di accesso alla fotocamera...');
-    
     try {
       if (!videoRef.current) {
         throw new Error('Riferimento video non disponibile');
       }
-      
       const constraints = { video: { facingMode: 'environment' } };
       addDebugMessage(`Richiesta stream con constraints: ${JSON.stringify(constraints)}`);
-      
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       if (stream.getVideoTracks().length === 0) {
         throw new Error('Nessuna traccia video disponibile nello stream');
       }
-      
       addDebugMessage(`Stream ottenuto con ${stream.getVideoTracks().length} tracce video`);
       videoRef.current.srcObject = stream;
-      
       videoRef.current.onloadedmetadata = () => {
         addDebugMessage(`Video metadata caricato: ${videoRef.current.videoWidth}x${videoRef.current.videoHeight}`);
       };
-      
       videoRef.current.onplaying = () => {
         addDebugMessage('Video in riproduzione');
         setCameraActive(true);
         setLoading(false);
       };
-      
       await videoRef.current.play();
       addDebugMessage('Play video avviato');
-      
     } catch (error) {
       addDebugMessage(`Errore nell'avvio della fotocamera: ${error.message}`);
       setCameraError(`Errore: ${error.message}`);
@@ -97,7 +93,6 @@ const ARApp = () => {
     }
   };
 
-  // Cattura un frame dal video e lo invia a Google Cloud Vision
   const captureFrameAndSendToAPI = async () => {
     if (!videoRef.current) {
       addDebugMessage("Impossibile catturare il frame: videoRef non disponibile");
@@ -105,25 +100,21 @@ const ARApp = () => {
     }
     addDebugMessage("Cattura frame in corso...");
     const video = videoRef.current;
-    
-    // Crea un canvas offscreen per catturare il frame
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // Converte il canvas in una stringa base64
     const dataUrl = canvas.toDataURL('image/jpeg');
     const base64Image = dataUrl.split(',')[1];
-    
-    // Sostituisci con la tua API key di Google Cloud Vision
+
     const apiKey = 'AIzaSyAuGHvL8Mb83n-pmWLaBJ55L92AVl4kA3s';
     const requestBody = {
       requests: [
         {
           image: { content: base64Image },
           features: [
+            { type: "WEB_DETECTION", maxResults: 5 },
             { type: "LABEL_DETECTION", maxResults: 5 },
             { type: "LANDMARK_DETECTION", maxResults: 5 }
           ]
@@ -143,7 +134,6 @@ const ARApp = () => {
       );
       const data = await response.json();
       setCloudVisionResponse(data);
-      // Attendi l'elaborazione della risposta
       await processVisionResponse(data);
       setModalOpen(true);
       addDebugMessage("Risposta da Cloud Vision ricevuta");
@@ -152,59 +142,107 @@ const ARApp = () => {
     }
   };
 
-  // Funzione per analizzare la risposta e ottenere dettagli tramite Wikipedia
+  // Qui, nel ramo webDetection, invece di cercare automaticamente,
+  // raccogliamo le candidate e lasciamo che l'utente scelga
   const processVisionResponse = async (data) => {
-    // Resetta la risposta di Wikipedia ad ogni nuova chiamata
     setWikiResponse(null);
+    setShowManualInput(false);
+    setCandidates([]); // reset candidate list
     const responseData = data.responses && data.responses[0];
     let message = 'Nessuna rilevazione significativa';
+
     if (responseData) {
-      // Se è presente landmarkAnnotations, consideriamo che si tratti di un monumento
-      if (responseData.landmarkAnnotations && responseData.landmarkAnnotations.length > 0) {
+      if (
+        responseData.webDetection &&
+        responseData.webDetection.webEntities &&
+        responseData.webDetection.webEntities.length > 0
+      ) {
+        const candidateList = responseData.webDetection.webEntities
+          .filter(entity => entity.description)
+          .map(entity => ({
+            original: entity.description,
+            mapped: mapTitle(entity.description)
+          }));
+        if (candidateList.length > 0) {
+          setCandidates(candidateList);
+          message = "Seleziona una descrizione da cercare:";
+        } else {
+          message = 'Web Detection ha trovato webEntities, ma nessuna description utile.';
+          setShowManualInput(true);
+        }
+      } else if (responseData.landmarkAnnotations && responseData.landmarkAnnotations.length > 0) {
         const landmark = responseData.landmarkAnnotations[0];
-        // Mappa il titolo in inglese a quello in italiano (es. Colosseum -> Colosseo)
-        const italianTitle = mapEnglishToItalian(landmark.description);
+        const italianTitle = mapTitle(landmark.description);
         message = `Monumento rilevato: ${landmark.description} (${italianTitle})`;
-        // Ottieni dettagli da Wikipedia usando il titolo mappato
         const monumentDetails = await fetchArtworkDetails(italianTitle);
         if (monumentDetails && monumentDetails.extract) {
           message += `\nDettagli: ${monumentDetails.extract}`;
           setWikiResponse(monumentDetails);
         }
-      } 
-      // Altrimenti, controlla le etichette per opere d'arte
-      else if (responseData.labelAnnotations && responseData.labelAnnotations.length > 0) {
-        // Definisci alcune etichette generiche da escludere
+      } else if (responseData.labelAnnotations && responseData.labelAnnotations.length > 0) {
         const genericLabels = ['art', 'painting', 'sculpture', 'picture', 'canvas'];
-        // Filtra le etichette non generiche per ottenere un titolo specifico
         const specificLabels = responseData.labelAnnotations.filter(label =>
           !genericLabels.includes(label.description.toLowerCase())
         );
         if (specificLabels.length > 0) {
-          const artworkTitle = specificLabels[0].description;
-          message = `Opera d'arte riconosciuta: ${artworkTitle}`;
-          // Prova a ottenere dettagli da Wikipedia (in italiano)
-          const artworkDetails = await fetchArtworkDetails(artworkTitle);
+          const recognizedTitle = specificLabels[0].description;
+          const finalTitle = mapTitle(recognizedTitle);
+          message = `Opera d'arte riconosciuta: ${recognizedTitle}`;
+          const artworkDetails = await fetchArtworkDetails(finalTitle);
           if (artworkDetails && artworkDetails.extract) {
             message += `\nDettagli: ${artworkDetails.extract}`;
             setWikiResponse(artworkDetails);
           }
         } else {
-          message = `Etichette rilevate: ${responseData.labelAnnotations.map(label => label.description).join(', ')}`;
+          const allLabels = responseData.labelAnnotations.map(label => label.description).join(', ');
+          message = `Etichette rilevate: ${allLabels}\nSe stai inquadrando un'opera d'arte non identificata, inserisci manualmente il titolo:`;
+          setShowManualInput(true);
         }
+      } else {
+        message = 'Nessun risultato da Landmark, Label o Web Detection.';
+        setShowManualInput(true);
       }
     }
     setDetectionMessage(message);
     addDebugMessage(`Messaggio rilevazione: ${message}`);
   };
 
-  // Ferma la camera e resetta lo stream
+  // Funzione per gestire la scelta di un candidato dall'elenco
+  const handleCandidateSelect = async (candidate) => {
+    addDebugMessage(`Ricerca per candidato: ${candidate.mapped}`);
+    const wikiDetails = await fetchArtworkDetails(candidate.mapped);
+    let newMessage = detectionMessage;
+    if (wikiDetails && wikiDetails.extract) {
+      newMessage += `\nDettagli: ${wikiDetails.extract}`;
+      setWikiResponse(wikiDetails);
+    } else {
+      newMessage += `\nNessun risultato specifico su Wikipedia per "${candidate.mapped}".`;
+      setShowManualInput(true);
+    }
+    setDetectionMessage(newMessage);
+    setCandidates([]); // pulisci la lista candidate dopo la scelta
+  };
+
+  const handleManualSearch = async () => {
+    if (!manualTitle) return;
+    addDebugMessage(`Ricerca manuale per: ${manualTitle}`);
+    const details = await fetchArtworkDetails(manualTitle);
+    if (details && details.extract) {
+      const newMessage = `${detectionMessage}\nRisultato ricerca manuale: ${details.extract}`;
+      setDetectionMessage(newMessage);
+      setWikiResponse(details);
+    } else {
+      const newMessage = `${detectionMessage}\nNessun risultato trovato per "${manualTitle}" su Wikipedia.`;
+      setDetectionMessage(newMessage);
+    }
+  };
+
   const resetCamera = () => {
     setCameraActive(false);
     addDebugMessage("Reset della camera in corso...");
     if (videoRef.current && videoRef.current.srcObject) {
       const tracks = videoRef.current.srcObject.getTracks();
-      tracks.forEach((track) => track.stop());
+      tracks.forEach(track => track.stop());
       videoRef.current.srcObject = null;
       addDebugMessage("Stream camera fermato");
     }
@@ -212,100 +250,37 @@ const ARApp = () => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-100">
-      {/* Header */}
-      <header className="bg-indigo-600 text-white p-4 shadow-md flex items-center justify-between">
-        {cameraActive ? (
-          <button onClick={resetCamera} className="flex items-center text-white">
-            <ArrowLeft size={24} className="mr-2" />
-            <span>Indietro</span>
-          </button>
-        ) : (
-          <h1 className="text-xl font-bold">ArtScanner</h1>
-        )}
-      </header>
-
-      {/* Video di background */}
-      <div className="absolute inset-0 z-0">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="absolute inset-0 h-full w-full object-contain bg-black"
-          style={{ display: cameraActive ? 'block' : 'none' }}
-        />
-      </div>
-
-      {/* Corpo principale */}
+      <Header cameraActive={cameraActive} onBack={resetCamera} />
+      <CameraFeed videoRef={videoRef} cameraActive={cameraActive} />
       <main className="flex-1 relative overflow-hidden">
         {cameraActive ? (
           <div className="absolute top-4 left-0 right-0 flex justify-center z-20">
-            <button
-              onClick={captureFrameAndSendToAPI}
-              className="bg-white text-indigo-600 px-4 py-2 rounded-lg font-medium"
-            >
+            <button onClick={captureFrameAndSendToAPI} className="bg-white text-indigo-600 px-4 py-2 rounded-lg font-medium">
               Cattura Frame
             </button>
           </div>
         ) : (
           <div className="p-6 flex flex-col items-center">
-            <button
-              onClick={startCamera}
-              className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium"
-              disabled={loading}
-            >
+            <button onClick={startCamera} className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium" disabled={loading}>
               {loading ? "Caricamento..." : "Avvia Camera"}
             </button>
             {cameraError && <p className="mt-4 text-red-500">{cameraError}</p>}
           </div>
         )}
-
-        {/* Modale per mostrare le risposte */}
         {modalOpen && cloudVisionResponse && (
-          <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-            <div 
-              className="absolute inset-0 bg-black opacity-50" 
-              onClick={() => setModalOpen(false)}
-            ></div>
-            <div className="bg-white rounded-lg shadow-lg max-w-md w-full relative z-10">
-              <div className="flex justify-between items-center border-b p-4">
-                <h3 className="text-lg font-bold">Risposta Cloud Vision</h3>
-                <button 
-                  onClick={() => setModalOpen(false)} 
-                  className="text-gray-600 hover:text-gray-800"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-              <div className="p-4 overflow-auto max-h-80">
-                <p className="mb-2 font-semibold text-sm">{detectionMessage}</p>
-                <pre className="text-xs whitespace-pre-wrap">
-                  {JSON.stringify(cloudVisionResponse, null, 2)}
-                </pre>
-                {wikiResponse && (
-                  <div className="mt-4">
-                    <h4 className="font-bold text-sm">Risposta Wikipedia:</h4>
-                    <pre className="text-xs whitespace-pre-wrap">
-                      {JSON.stringify(wikiResponse, null, 2)}
-                    </pre>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <ModalResponse
+            detectionMessage={detectionMessage}
+            cloudVisionResponse={cloudVisionResponse}
+            wikiResponse={wikiResponse}
+            manualTitle={manualTitle}
+            candidates={candidates}
+            onManualChange={(e) => setManualTitle(e.target.value)}
+            onManualSearch={handleManualSearch}
+            onCandidateSelect={handleCandidateSelect}
+            onClose={() => setModalOpen(false)}
+          />
         )}
-
-        {/* Pannello Debug */}
-        <div className="absolute bottom-2 left-2 right-2 bg-white bg-opacity-90 rounded p-2 z-40 max-h-32 overflow-auto">
-          <h3 className="font-bold mb-1 text-sm">Debug Info:</h3>
-          <div className="text-xs">
-            {debugInfo.slice(-10).map((item, index) => (
-              <div key={index}>
-                <span className="text-gray-500">{item.time}</span>: {item.message}
-              </div>
-            ))}
-          </div>
-        </div>
+      
       </main>
     </div>
   );
